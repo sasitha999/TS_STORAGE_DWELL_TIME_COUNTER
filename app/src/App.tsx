@@ -185,16 +185,16 @@ function App() {
           >
             <Box>
               <Typography variant="h3" component="h1" gutterBottom>
-                Excel Transformer
+                TS STORAGE DWELL TIME CALCULATOR
               </Typography>
               <Typography variant="body1" color="text.secondary">
-                Upload a workbook, add a computed column with dummy math, and download the
-                updated file.
+                Upload an Excel file with the following details, and download the
+                updated file with the computed TS STORAGE DWELL TIME columns.
               </Typography>
             </Box>
             <Chip
               color="info"
-              label="React + TypeScript + MUI"
+              label="JCT Billing"
               sx={{ alignSelf: { xs: 'flex-start', md: 'center' }, fontWeight: 600 }}
             />
           </Stack>
