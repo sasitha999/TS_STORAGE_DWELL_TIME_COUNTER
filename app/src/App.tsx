@@ -7,7 +7,11 @@ import {
   Button,
   Chip,
   Container,
+  FormControl,
+  InputLabel,
+  MenuItem,
   Paper,
+  Select,
   Stack,
   Table,
   TableBody,
@@ -23,39 +27,162 @@ import * as XLSX from 'xlsx'
 
 type ExcelRow = Record<string, string | number | boolean | null>
 
-const COMPUTED_COLUMN_NAME = 'DummyComputedValue'
+const REQUIRED_COLUMNS = ['Unit Nbr', 'Type ISO', 'Category', 'Frght Kind', 'ITT_IB_Disch_Date_Time', 'Time In', 'Loaded']
+const COMPUTED_COLUMN_NAMES = {
+  DAYS_AT_PORT_COLOMBO: 'Days at port of Colombo',
+  DAYS_AT_OTHER_TERMINALS: 'No of Days at other terminals',
+  DAYS_AT_SLPA_TERMINAL: 'No of Days at SLPA Terminal',
+  FIRST_TIER: '1st Tier',
+  SECOND_TIER: '2nd Tier',
+  THIRD_TIER: '3rd Tier',
+}
+const LINE_OPTIONS = [
+  { label: 'Normal', value: 14 },
+  { label: 'MSC', value: 45 },
+  { label: 'CMA', value: 30 },
+  { label: 'MKL', value: 30 },
+  { label: 'ELK', value: 30 },
+  { label: 'HLL', value: 21 },
+]
+const DEFAULT_LINE_VALUE = 14
 const MAX_PREVIEW_ROWS = 8
 
-function toNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value
+function parseDateString(dateStr: string): Date | null {
+  // Format: "26-Feb-14 0000" (YY-MMM-DD HHMM)
+  // NOTE: Time portion is parsed but ignored - only date is used for calculation
+  const parts = dateStr.trim().split(' ')
+  if (parts.length !== 2) return null
+
+  const datePart = parts[0] // "26-Feb-14"
+  const dateParts = datePart.split('-') // ["26", "Feb", "14"]
+  if (dateParts.length !== 3) return null
+
+  const year = parseInt(dateParts[0], 10)
+  const monthStr = dateParts[1]
+  const day = parseInt(dateParts[2], 10)
+
+  const months: Record<string, number> = {
+    Jan: 0,
+    Feb: 1,
+    Mar: 2,
+    Apr: 3,
+    May: 4,
+    Jun: 5,
+    Jul: 6,
+    Aug: 7,
+    Sep: 8,
+    Oct: 9,
+    Nov: 10,
+    Dec: 11,
   }
 
-  if (typeof value === 'string') {
-    const normalized = Number(value.trim())
-    if (Number.isFinite(normalized)) {
-      return normalized
+  const month = months[monthStr]
+  if (month === undefined) return null
+
+  // YY format: convert to full year (26 -> 2026, 14 -> 2014)
+  const fullYear = year < 100 ? 2000 + year : year
+
+  // Return Date at midnight (00:00:00) - time portion is ignored
+  return new Date(fullYear, month, day, 0, 0, 0)
+}
+
+function calculateDaysAtPort(row: ExcelRow): number | null {
+  const dischargeDate = row['ITT_IB_Disch_Date_Time']
+  const loadedDate = row['Loaded']
+
+  if (!dischargeDate || !loadedDate) return null
+
+  const dateStart = parseDateString(String(dischargeDate))
+  const dateEnd = parseDateString(String(loadedDate))
+
+  if (!dateStart || !dateEnd) return null
+
+  // Calculate difference in full days only (time portion ignored, both dates at midnight)
+  const diffTime = Math.abs(dateEnd.getTime() - dateStart.getTime())
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+
+  // Add 1 as per the Excel DATEDIF formula logic
+  return diffDays + 1
+}
+
+function calculateDaysAtOtherTerminals(row: ExcelRow): number | null {
+  const dischargeDate = row['ITT_IB_Disch_Date_Time']
+  const timeInDate = row['Time In']
+
+  if (!dischargeDate || !timeInDate) return null
+
+  const dateStart = parseDateString(String(dischargeDate))
+  const dateEnd = parseDateString(String(timeInDate))
+
+  if (!dateStart || !dateEnd) return null
+
+  // Calculate difference in full days only (time portion ignored, both dates at midnight)
+  const diffTime = Math.abs(dateEnd.getTime() - dateStart.getTime())
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+
+  // No +1 for this calculation (matches Excel DATEDIF without modification)
+  return diffDays
+}
+
+function calculateDaysAtSLPATerminal(daysAtPort: number | null, daysAtOtherTerminals: number | null): number | null {
+  if (daysAtPort === null || daysAtOtherTerminals === null) return null
+  return daysAtPort - daysAtOtherTerminals
+}
+
+function getDateSections(
+  fullDays: number,
+  gateInDays: number,
+  freeThreshold: number = 14,
+): {
+  freeSection: number
+  firstTier: number
+  secondTier: number
+  thirdTier: number
+} {
+  // Generic helper: amount of fullDays that falls inside (low, high],
+  // discounted by whichever is larger — the tier's own start, or gateInDays.
+  const tierAmount = (low: number, high: number) => {
+    if (fullDays <= low) return 0
+    return Math.max(0, Math.min(fullDays, high) - Math.max(gateInDays, low))
+  }
+
+  const firstTier = freeThreshold < 30 ? tierAmount(freeThreshold, 30) : 0
+  const secondTier = freeThreshold < 45 ? tierAmount(Math.max(freeThreshold, 30), 45) : 0
+  const thirdTier = tierAmount(Math.max(freeThreshold, 45), Infinity)
+
+  return {
+    freeSection: Math.min(fullDays, freeThreshold),
+    firstTier,
+    secondTier,
+    thirdTier,
+  }
+}
+
+function validateExcelColumns(actualColumns: string[]): { valid: boolean; message?: string } {
+  // Check if the number of columns matches
+  if (actualColumns.length !== REQUIRED_COLUMNS.length) {
+    return {
+      valid: false,
+      message: `Invalid Excel file. Expected ${REQUIRED_COLUMNS.length} columns, found ${actualColumns.length}. Actual columns: ${actualColumns.join(', ')}`,
     }
   }
 
-  return null
-}
+  // Check if columns are in the correct order and have correct names
+  const columnsMatch = REQUIRED_COLUMNS.every((col, index) => col === actualColumns[index])
 
-function getDummyComputedValue(row: ExcelRow, rowIndex: number): number {
-  const numericValues = Object.values(row)
-    .map((value) => toNumber(value))
-    .filter((value): value is number => value !== null)
+  if (!columnsMatch) {
+    return {
+      valid: false,
+      message: `Invalid Excel file. Columns must be in the following order: ${REQUIRED_COLUMNS.join(', ')}. Actual columns: ${actualColumns.join(', ')}`,
+    }
+  }
 
-  const baseline =
-    numericValues.length > 0
-      ? numericValues.reduce((sum, value) => sum + value, 0) / numericValues.length
-      : rowIndex + 1
-
-  return Number((baseline * 1.27 + 5).toFixed(2))
+  return { valid: true }
 }
 
 function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [selectedLine, setSelectedLine] = useState<number>(DEFAULT_LINE_VALUE)
   const [processedBlob, setProcessedBlob] = useState<Blob | null>(null)
   const [downloadFileName, setDownloadFileName] = useState('updated.xlsx')
   const [previewRows, setPreviewRows] = useState<ExcelRow[]>([])
@@ -122,10 +249,40 @@ function App() {
         throw new Error('The first worksheet is empty. Add at least one data row.')
       }
 
-      const transformedRows = parsedRows.map((row, index) => ({
-        ...row,
-        [COMPUTED_COLUMN_NAME]: getDummyComputedValue(row, index),
-      }))
+      // Validate column names
+      const actualColumnNames = Object.keys(parsedRows[0])
+
+      const validation = validateExcelColumns(actualColumnNames)
+      if (!validation.valid) {
+        throw new Error(validation.message)
+      }
+
+      const transformedRows = parsedRows.map((row) => {
+        const daysAtPort = calculateDaysAtPort(row)
+        const daysAtOtherTerminals = calculateDaysAtOtherTerminals(row)
+        const daysAtSLPA = calculateDaysAtSLPATerminal(daysAtPort, daysAtOtherTerminals)
+
+        let firstTier: number | null = null
+        let secondTier: number | null = null
+        let thirdTier: number | null = null
+
+        if (daysAtPort !== null && daysAtOtherTerminals !== null) {
+          const tiers = getDateSections(daysAtPort, daysAtOtherTerminals, selectedLine)
+          firstTier = tiers.firstTier
+          secondTier = tiers.secondTier
+          thirdTier = tiers.thirdTier
+        }
+
+        return {
+          ...row,
+          [COMPUTED_COLUMN_NAMES.DAYS_AT_PORT_COLOMBO]: daysAtPort,
+          [COMPUTED_COLUMN_NAMES.DAYS_AT_OTHER_TERMINALS]: daysAtOtherTerminals,
+          [COMPUTED_COLUMN_NAMES.DAYS_AT_SLPA_TERMINAL]: daysAtSLPA,
+          [COMPUTED_COLUMN_NAMES.FIRST_TIER]: firstTier,
+          [COMPUTED_COLUMN_NAMES.SECOND_TIER]: secondTier,
+          [COMPUTED_COLUMN_NAMES.THIRD_TIER]: thirdTier,
+        }
+      })
 
       const outputSheet = XLSX.utils.json_to_sheet(transformedRows)
       const outputWorkbook = XLSX.utils.book_new()
@@ -205,6 +362,23 @@ function App() {
               <input hidden type="file" accept=".xlsx,.xls" onChange={handleFileSelection} />
             </Button>
 
+            <FormControl sx={{ minWidth: 150 }}>
+              <InputLabel id="line-select-label">Select Line</InputLabel>
+              <Select
+                labelId="line-select-label"
+                id="line-select"
+                value={selectedLine}
+                label="Select Line"
+                onChange={(event) => setSelectedLine(event.target.value as number)}
+              >
+                {LINE_OPTIONS.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
             <Button
               variant="contained"
               color="primary"
@@ -232,13 +406,26 @@ function App() {
             </Typography>
           )}
 
+          <Alert severity="info">
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
+              Required Columns (in order):
+            </Typography>
+            <Typography variant="body2">
+              {REQUIRED_COLUMNS.join(' • ')}
+            </Typography>
+          </Alert>
+
           {errorMessage && <Alert severity="error">{errorMessage}</Alert>}
 
           {!errorMessage && processedBlob && (
             <Alert severity="success">
               File processed successfully. Previewing first {previewRows.length} rows with the new
-              {` ${COMPUTED_COLUMN_NAME} `}
-              column.
+              computed columns: {COMPUTED_COLUMN_NAMES.DAYS_AT_PORT_COLOMBO},
+              {' '}{COMPUTED_COLUMN_NAMES.DAYS_AT_OTHER_TERMINALS},
+              {' '}{COMPUTED_COLUMN_NAMES.DAYS_AT_SLPA_TERMINAL},
+              {' '}{COMPUTED_COLUMN_NAMES.FIRST_TIER},
+              {' '}{COMPUTED_COLUMN_NAMES.SECOND_TIER}, and
+              {' '}{COMPUTED_COLUMN_NAMES.THIRD_TIER}.
             </Alert>
           )}
 
