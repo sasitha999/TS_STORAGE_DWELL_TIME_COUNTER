@@ -30,11 +30,29 @@ type ExcelRow = Record<string, string | number | boolean | null>
 const REQUIRED_COLUMNS = ['Unit Nbr', 'Type ISO', 'Category', 'Frght Kind', 'ITT_IB_Disch_Date_Time', 'Time In', 'Loaded']
 const COMPUTED_COLUMN_NAMES = {
   DAYS_AT_PORT_COLOMBO: 'Days at port of Colombo',
-  DAYS_AT_OTHER_TERMINALS: 'No of Days at other terminals',
-  DAYS_AT_SLPA_TERMINAL: 'No of Days at SLPA Terminal',
+  DAYS_AT_OTHER_TERMINALS: 'No of Days at other Terminals',
+  DAYS_AT_SLPA_TERMINAL: 'No of Days at SLPA Terminals',
   FIRST_TIER: '1st Tier',
   SECOND_TIER: '2nd Tier',
   THIRD_TIER: '3rd Tier',
+  FIRST_TIER_DATE_RANGE: '1st Tier Date Range',
+  SECOND_TIER_DATE_RANGE: '2nd Tier Date Range',
+  THIRD_TIER_DATE_RANGE: '3rd Tier Date Range',
+  FIRST_TIER_RENT: '1st Tier Rent (USD)',
+  SECOND_TIER_RENT: '2nd Tier Rent (USD)',
+  THIRD_TIER_RENT: '3rd Tier Rent',
+}
+
+const EMPTY_RATES = {
+  firstTier: { 20: 3, 40: 6, 45: 18 },
+  secondTier: { 20: 7, 40: 14, 45: 18 },
+  thirdTier: { 20: 21, 40: 42, 45: 52 },
+}
+
+const LADEN_RATES = {
+  firstTier: { 20: 7, 40: 14, 45: 18 },
+  secondTier: { 20: 14, 40: 28, 45: 36 },
+  thirdTier: { 20: 21, 40: 42, 45: 54 },
 }
 const LINE_OPTIONS = [
   { label: 'Normal', value: 14 },
@@ -158,6 +176,95 @@ function getDateSections(
   }
 }
 
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+function formatDateForRange(date: Date): string {
+  const day = String(date.getDate()).padStart(2, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = String(date.getFullYear())
+  return `${year}/${month}/${day}`
+}
+
+function getTierDateRanges(
+  loadedDate: Date | null,
+  firstTier: number | null,
+  secondTier: number | null,
+  thirdTier: number | null,
+): {
+  firstTierDateRange: string
+  secondTierDateRange: string
+  thirdTierDateRange: string
+} {
+  if (!loadedDate) {
+    return {
+      firstTierDateRange: 'NA',
+      secondTierDateRange: 'NA',
+      thirdTierDateRange: 'NA',
+    }
+  }
+
+  let endCursor = new Date(loadedDate)
+
+  const buildRange = (tierDays: number | null): string => {
+    const days = tierDays !== null ? Math.max(0, Math.trunc(tierDays)) : 0
+
+    if (days <= 0) {
+      return 'NA'
+    }
+
+    const startDate = addDays(endCursor, -days)
+    const range = `${formatDateForRange(startDate)} to ${formatDateForRange(endCursor)}`
+    endCursor = startDate
+    return range
+  }
+
+  const thirdTierDateRange = buildRange(thirdTier)
+  const secondTierDateRange = buildRange(secondTier)
+  const firstTierDateRange = buildRange(firstTier)
+
+  return {
+    firstTierDateRange,
+    secondTierDateRange,
+    thirdTierDateRange,
+  }
+}
+
+function getContainerSize(typeIso: unknown): 20 | 40 | 45 | null {
+  const normalized = String(typeIso ?? '').trim().toUpperCase()
+  const firstChar = normalized.charAt(0)
+
+  if (firstChar === '4') return 40
+  if (firstChar === '2') return 20
+  if (firstChar === '9' || firstChar === 'L') return 45
+
+  return null
+}
+
+function isLadenContainer(frghtKind: unknown): boolean {
+  return String(frghtKind ?? '').trim().toUpperCase() === 'FCL'
+}
+
+function calculateTierRent(
+  tierDays: number | null,
+  tierName: 'firstTier' | 'secondTier' | 'thirdTier',
+  containerSize: 20 | 40 | 45 | null,
+  laden: boolean,
+): number | null {
+  if (tierDays === null || containerSize === null) {
+    return null
+  }
+
+  const roundedDays = Math.max(0, Math.trunc(tierDays))
+  const rateTable = laden ? LADEN_RATES : EMPTY_RATES
+  const dailyRate = rateTable[tierName][containerSize]
+
+  return roundedDays * dailyRate
+}
+
 function validateExcelColumns(actualColumns: string[]): { valid: boolean; message?: string } {
   // Check if the number of columns matches
   if (actualColumns.length !== REQUIRED_COLUMNS.length) {
@@ -261,6 +368,9 @@ function App() {
         const daysAtPort = calculateDaysAtPort(row)
         const daysAtOtherTerminals = calculateDaysAtOtherTerminals(row)
         const daysAtSLPA = calculateDaysAtSLPATerminal(daysAtPort, daysAtOtherTerminals)
+        const loadedDate = parseDateString(String(row['Loaded'] ?? ''))
+        const containerSize = getContainerSize(row['Type ISO'])
+        const laden = isLadenContainer(row['Frght Kind'])
 
         let firstTier: number | null = null
         let secondTier: number | null = null
@@ -273,14 +383,25 @@ function App() {
           thirdTier = tiers.thirdTier
         }
 
+        const tierRanges = getTierDateRanges(loadedDate, firstTier, secondTier, thirdTier)
+        const firstTierRent = calculateTierRent(firstTier, 'firstTier', containerSize, laden)
+        const secondTierRent = calculateTierRent(secondTier, 'secondTier', containerSize, laden)
+        const thirdTierRent = calculateTierRent(thirdTier, 'thirdTier', containerSize, laden)
+
         return {
           ...row,
           [COMPUTED_COLUMN_NAMES.DAYS_AT_PORT_COLOMBO]: daysAtPort,
           [COMPUTED_COLUMN_NAMES.DAYS_AT_OTHER_TERMINALS]: daysAtOtherTerminals,
           [COMPUTED_COLUMN_NAMES.DAYS_AT_SLPA_TERMINAL]: daysAtSLPA,
           [COMPUTED_COLUMN_NAMES.FIRST_TIER]: firstTier,
+          [COMPUTED_COLUMN_NAMES.FIRST_TIER_DATE_RANGE]: tierRanges.firstTierDateRange,
+          [COMPUTED_COLUMN_NAMES.FIRST_TIER_RENT]: firstTierRent,
           [COMPUTED_COLUMN_NAMES.SECOND_TIER]: secondTier,
+          [COMPUTED_COLUMN_NAMES.SECOND_TIER_DATE_RANGE]: tierRanges.secondTierDateRange,
+          [COMPUTED_COLUMN_NAMES.SECOND_TIER_RENT]: secondTierRent,
           [COMPUTED_COLUMN_NAMES.THIRD_TIER]: thirdTier,
+          [COMPUTED_COLUMN_NAMES.THIRD_TIER_DATE_RANGE]: tierRanges.thirdTierDateRange,
+          [COMPUTED_COLUMN_NAMES.THIRD_TIER_RENT]: thirdTierRent,
         }
       })
 
@@ -321,11 +442,14 @@ function App() {
   }
 
   return (
-    <Container maxWidth="lg" sx={{ py: { xs: 4, md: 8 } }}>
+    <Container maxWidth={false} disableGutters sx={{ px: 3, py: 2, height: '100vh' }}>
       <Paper
         elevation={0}
         sx={{
-          p: { xs: 3, md: 5 },
+          p: 3,
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
           borderRadius: 4,
           border: '1px solid',
           borderColor: 'divider',
@@ -334,9 +458,9 @@ function App() {
           backdropFilter: 'blur(4px)',
         }}
       >
-        <Stack spacing={3}>
+        <Stack spacing={3} sx={{ height: '100%' }}>
           <Stack
-            direction={{ xs: 'column', md: 'row' }}
+            direction="row"
             spacing={2}
             sx={{ justifyContent: 'space-between' }}
           >
@@ -356,7 +480,7 @@ function App() {
             />
           </Stack>
 
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+          <Stack direction="row" spacing={2}>
             <Button component="label" variant="outlined" startIcon={<CloudUploadRoundedIcon />}>
               Choose Excel File
               <input hidden type="file" accept=".xlsx,.xls" onChange={handleFileSelection} />
@@ -372,7 +496,7 @@ function App() {
                 onChange={(event) => setSelectedLine(event.target.value as number)}
               >
                 {LINE_OPTIONS.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
+                  <MenuItem key={option.label + '-' + option.value} value={option.value}>
                     {option.label}
                   </MenuItem>
                 ))}
@@ -386,7 +510,7 @@ function App() {
               onClick={handleProcessFile}
               disabled={!selectedFile || isProcessing}
             >
-              {isProcessing ? 'Processing...' : 'Add Computed Column'}
+              {isProcessing ? 'Processing...' : 'Calculate'}
             </Button>
 
             <Button
@@ -424,8 +548,14 @@ function App() {
               {' '}{COMPUTED_COLUMN_NAMES.DAYS_AT_OTHER_TERMINALS},
               {' '}{COMPUTED_COLUMN_NAMES.DAYS_AT_SLPA_TERMINAL},
               {' '}{COMPUTED_COLUMN_NAMES.FIRST_TIER},
-              {' '}{COMPUTED_COLUMN_NAMES.SECOND_TIER}, and
-              {' '}{COMPUTED_COLUMN_NAMES.THIRD_TIER}.
+              {' '}{COMPUTED_COLUMN_NAMES.SECOND_TIER},
+              {' '}{COMPUTED_COLUMN_NAMES.THIRD_TIER},
+              {' '}{COMPUTED_COLUMN_NAMES.FIRST_TIER_DATE_RANGE},
+              {' '}{COMPUTED_COLUMN_NAMES.FIRST_TIER_RENT},
+              {' '}{COMPUTED_COLUMN_NAMES.SECOND_TIER_DATE_RANGE}, and
+              {' '}{COMPUTED_COLUMN_NAMES.SECOND_TIER_RENT},
+              {' '}{COMPUTED_COLUMN_NAMES.THIRD_TIER_DATE_RANGE},
+              {' '}{COMPUTED_COLUMN_NAMES.THIRD_TIER_RENT}.
             </Alert>
           )}
 
@@ -433,13 +563,21 @@ function App() {
             <TableContainer
               component={Paper}
               variant="outlined"
-              sx={{ borderRadius: 2, overflowX: 'auto' }}
+              sx={{ borderRadius: 2, overflowX: 'auto', flex: 1 }}
             >
               <Table size="small">
                 <TableHead>
                   <TableRow>
                     {previewColumns.map((column) => (
-                      <TableCell key={column} sx={{ fontWeight: 700 }}>
+                      <TableCell
+                        key={column}
+                        sx={{
+                          fontWeight: 700,
+                          ...(column.includes('Date Range')
+                            ? { minWidth: 220, whiteSpace: 'nowrap' }
+                            : {}),
+                        }}
+                      >
                         {column}
                       </TableCell>
                     ))}
@@ -449,7 +587,14 @@ function App() {
                   {previewRows.map((row, rowIndex) => (
                     <TableRow key={`row-${rowIndex}`}>
                       {previewColumns.map((column) => (
-                        <TableCell key={`${rowIndex}-${column}`}>
+                        <TableCell
+                          key={`${rowIndex}-${column}`}
+                          sx={
+                            column.includes('Date Range')
+                              ? { minWidth: 220, whiteSpace: 'nowrap' }
+                              : undefined
+                          }
+                        >
                           {String(row[column] ?? '')}
                         </TableCell>
                       ))}
