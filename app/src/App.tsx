@@ -40,7 +40,8 @@ const COMPUTED_COLUMN_NAMES = {
   THIRD_TIER_DATE_RANGE: '3rd Tier Date Range',
   FIRST_TIER_RENT: '1st Tier Rent (USD)',
   SECOND_TIER_RENT: '2nd Tier Rent (USD)',
-  THIRD_TIER_RENT: '3rd Tier Rent',
+  THIRD_TIER_RENT: '3rd Tier Rent (USD)',
+  TOTAL_RENT: 'Total Rent (USD)',
 }
 
 const EMPTY_RATES = {
@@ -58,11 +59,10 @@ const LINE_OPTIONS = [
   { label: 'Normal', value: 14 },
   { label: 'MSC', value: 45 },
   { label: 'CMA', value: 30 },
-  { label: 'MKL', value: 30 },
   { label: 'ELK', value: 30 },
-  { label: 'HLL', value: 21 },
 ]
-const DEFAULT_LINE_VALUE = 14
+
+const DEFAULT_LINE_LABEL = 'Normal'
 const MAX_PREVIEW_ROWS = 8
 
 function parseDateString(dateStr: string): Date | null {
@@ -216,9 +216,11 @@ function getTierDateRanges(
       return 'NA'
     }
 
-    const startDate = addDays(endCursor, -days)
+    // Inclusive range for N days: start = end - (N - 1)
+    const startDate = addDays(endCursor, -(days - 1))
     const range = `${formatDateForRange(startDate)} to ${formatDateForRange(endCursor)}`
-    endCursor = startDate
+    // Move next tier end to one day before this tier's start to avoid overlap.
+    endCursor = addDays(startDate, -1)
     return range
   }
 
@@ -289,12 +291,15 @@ function validateExcelColumns(actualColumns: string[]): { valid: boolean; messag
 
 function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [selectedLine, setSelectedLine] = useState<number>(DEFAULT_LINE_VALUE)
+  const [selectedLine, setSelectedLine] = useState<string>(DEFAULT_LINE_LABEL)
   const [processedBlob, setProcessedBlob] = useState<Blob | null>(null)
   const [downloadFileName, setDownloadFileName] = useState('updated.xlsx')
   const [previewRows, setPreviewRows] = useState<ExcelRow[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+
+  const selectedLineThreshold =
+    LINE_OPTIONS.find((option) => option.label === selectedLine)?.value ?? LINE_OPTIONS[0].value
 
   const previewColumns = useMemo(() => {
     if (previewRows.length === 0) {
@@ -377,7 +382,7 @@ function App() {
         let thirdTier: number | null = null
 
         if (daysAtPort !== null && daysAtOtherTerminals !== null) {
-          const tiers = getDateSections(daysAtPort, daysAtOtherTerminals, selectedLine)
+          const tiers = getDateSections(daysAtPort, daysAtOtherTerminals, selectedLineThreshold)
           firstTier = tiers.firstTier
           secondTier = tiers.secondTier
           thirdTier = tiers.thirdTier
@@ -387,6 +392,10 @@ function App() {
         const firstTierRent = calculateTierRent(firstTier, 'firstTier', containerSize, laden)
         const secondTierRent = calculateTierRent(secondTier, 'secondTier', containerSize, laden)
         const thirdTierRent = calculateTierRent(thirdTier, 'thirdTier', containerSize, laden)
+        const totalRent =
+          (firstTierRent ?? 0) +
+          (secondTierRent ?? 0) +
+          (thirdTierRent ?? 0)
 
         return {
           ...row,
@@ -395,13 +404,14 @@ function App() {
           [COMPUTED_COLUMN_NAMES.DAYS_AT_SLPA_TERMINAL]: daysAtSLPA,
           [COMPUTED_COLUMN_NAMES.FIRST_TIER]: firstTier,
           [COMPUTED_COLUMN_NAMES.FIRST_TIER_DATE_RANGE]: tierRanges.firstTierDateRange,
-          [COMPUTED_COLUMN_NAMES.FIRST_TIER_RENT]: firstTierRent,
           [COMPUTED_COLUMN_NAMES.SECOND_TIER]: secondTier,
           [COMPUTED_COLUMN_NAMES.SECOND_TIER_DATE_RANGE]: tierRanges.secondTierDateRange,
-          [COMPUTED_COLUMN_NAMES.SECOND_TIER_RENT]: secondTierRent,
           [COMPUTED_COLUMN_NAMES.THIRD_TIER]: thirdTier,
           [COMPUTED_COLUMN_NAMES.THIRD_TIER_DATE_RANGE]: tierRanges.thirdTierDateRange,
+          [COMPUTED_COLUMN_NAMES.FIRST_TIER_RENT]: firstTierRent,
+          [COMPUTED_COLUMN_NAMES.SECOND_TIER_RENT]: secondTierRent,
           [COMPUTED_COLUMN_NAMES.THIRD_TIER_RENT]: thirdTierRent,
+          [COMPUTED_COLUMN_NAMES.TOTAL_RENT]: totalRent,
         }
       })
 
@@ -493,10 +503,10 @@ function App() {
                 id="line-select"
                 value={selectedLine}
                 label="Select Line"
-                onChange={(event) => setSelectedLine(event.target.value as number)}
+                onChange={(event) => setSelectedLine(event.target.value)}
               >
                 {LINE_OPTIONS.map((option) => (
-                  <MenuItem key={option.label + '-' + option.value} value={option.value}>
+                  <MenuItem key={option.label} value={option.label}>
                     {option.label}
                   </MenuItem>
                 ))}
@@ -544,18 +554,7 @@ function App() {
           {!errorMessage && processedBlob && (
             <Alert severity="success">
               File processed successfully. Previewing first {previewRows.length} rows with the new
-              computed columns: {COMPUTED_COLUMN_NAMES.DAYS_AT_PORT_COLOMBO},
-              {' '}{COMPUTED_COLUMN_NAMES.DAYS_AT_OTHER_TERMINALS},
-              {' '}{COMPUTED_COLUMN_NAMES.DAYS_AT_SLPA_TERMINAL},
-              {' '}{COMPUTED_COLUMN_NAMES.FIRST_TIER},
-              {' '}{COMPUTED_COLUMN_NAMES.SECOND_TIER},
-              {' '}{COMPUTED_COLUMN_NAMES.THIRD_TIER},
-              {' '}{COMPUTED_COLUMN_NAMES.FIRST_TIER_DATE_RANGE},
-              {' '}{COMPUTED_COLUMN_NAMES.FIRST_TIER_RENT},
-              {' '}{COMPUTED_COLUMN_NAMES.SECOND_TIER_DATE_RANGE}, and
-              {' '}{COMPUTED_COLUMN_NAMES.SECOND_TIER_RENT},
-              {' '}{COMPUTED_COLUMN_NAMES.THIRD_TIER_DATE_RANGE},
-              {' '}{COMPUTED_COLUMN_NAMES.THIRD_TIER_RENT}.
+              computed columns
             </Alert>
           )}
 
