@@ -5,11 +5,11 @@ export type ContainerSize = 20 | 40 | 45
 type TierName = 'firstTier' | 'secondTier' | 'thirdTier'
 
 export const REQUIRED_COLUMNS = [
-  'Unit Nbr',
-  'Type ISO',
   'Category',
-  'Frght Kind',
+  'Unit Nbr',
+  'Type Length',
   'ITT_IB_Disch_Date_Time',
+  'Frght Kind',
   'Time In',
   'Loaded',
 ]
@@ -227,6 +227,13 @@ export function getContainerSize(typeIso: unknown): ContainerSize | null {
   return null
 }
 
+export function formatTypeLength(containerSize: ContainerSize | null): string {
+  if (containerSize === 20) return "20'"
+  if (containerSize === 40) return "40'"
+  if (containerSize === 45) return "45'"
+  return ''
+}
+
 export function isLadenContainer(frghtKind: unknown): boolean {
   return String(frghtKind ?? '').trim().toUpperCase() === 'FCL'
 }
@@ -354,17 +361,19 @@ export function getComputedColumns(details: ComputedValues): Record<string, stri
 }
 
 export function applyComputedColumnsToRow(row: ExcelRow, freeThreshold: number): ExcelRow {
+  const containerSize = getContainerSize(row['Type Length'])
   const details = calculateComputedValues({
     dischargeDate: parseDateString(String(row['ITT_IB_Disch_Date_Time'] ?? '')),
     timeInDate: parseDateString(String(row['Time In'] ?? '')),
     loadedDate: parseDateString(String(row['Loaded'] ?? '')),
     freeThreshold,
-    containerSize: getContainerSize(row['Type ISO']),
+    containerSize,
     laden: isLadenContainer(row['Frght Kind']),
   })
 
   return {
     ...row,
+    'Type Length': formatTypeLength(containerSize),
     ...getComputedColumns(details),
   }
 }

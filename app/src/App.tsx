@@ -1,10 +1,20 @@
 import { Box, Chip, Container, Paper, Stack, Tab, Tabs, Typography } from '@mui/material'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import ExcelProcessorTab from './components/ExcelProcessorTab'
 import ManualCalculatorTab from './components/ManualCalculatorTab'
 
 function App() {
   const [activeTab, setActiveTab] = useState(0)
+
+  useEffect(() => {
+    // Log favicon loading
+    const favicon = document.querySelector('link[rel="icon"]') as HTMLLinkElement
+    if (favicon) {
+      console.log(`Favicon loaded: ${favicon.href}`)
+    } else {
+      console.warn('Favicon not found in document')
+    }
+  }, [])
 
   return (
     <Container maxWidth={false} disableGutters sx={{ px: 3, py: 2, minHeight: '100vh' }}>
@@ -27,6 +37,9 @@ function App() {
           <Stack direction="row" spacing={2} sx={{ justifyContent: 'space-between' }}>
             <Box>
               <Typography variant="h3" component="h1" gutterBottom>
+                JCT Billing Helper System
+              </Typography>
+              <Typography variant="h5" component="h2" gutterBottom sx={{ color: 'text.primary', fontWeight: 500 }}>
                 TS STORAGE DWELL TIME CALCULATOR
               </Typography>
               <Typography variant="body1" color="text.secondary">
