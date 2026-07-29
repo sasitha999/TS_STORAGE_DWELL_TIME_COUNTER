@@ -37,7 +37,7 @@ function App() {
           <Stack direction="row" spacing={2} sx={{ justifyContent: 'space-between' }}>
             <Box>
               <Typography variant="h3" component="h1" gutterBottom>
-                JCT Billing Helper System
+                JCT Billing - Storage Calculator
               </Typography>
               <Typography variant="h5" component="h2" gutterBottom sx={{ color: 'text.primary', fontWeight: 500 }}>
                 TS STORAGE DWELL TIME CALCULATOR
